@@ -1,0 +1,293 @@
+#########################################################################
+#### Paper: Hurtado et al. 2011
+#### Website: http://www.carroll-lab.org.uk/data
+#### Dataset: estrogen receptor and Fox1A in MCF-7 breast cancer lines
+#########################################################################
+
+### Downloading the data in R
+```{r}
+# read the input from the url
+#The peaks for FOXA1 in MCF-7 cell are in this file http://www.carroll-lab.org.uk/FreshFiles/Data/Data_Sheet_3/MCF7_FOXA1%20binding.bed
+
+FOXA1.df <- read.table("http://www.carroll-lab.org.uk/FreshFiles/Data/Data_Sheet_3/MCF7_FOXA1%20binding.bed", header=TRUE)
+```
+
+```{r}
+head(FOXA1.df)
+```
+
+#### Coverting peaks into a GRanges object : containder for genomic locations and their annotations
+
+```{r}
+library(GenomicRanges)
+
+FOXA1 <- GRanges(
+  FOXA1.df$chr,
+  IRanges(FOXA1.df$star, FOXA1.df$end),
+  strand="*"
+)
+
+
+# can add more data to each peak 
+names(FOXA1)<-paste("FOXA1_peak", 1:nrow(FOXA1.df), sep="_")
+score(FOXA1) <- FOXA1.df[,"X.10.log10.pvalue."]  #p-value
+
+head(FOXA1)
+```
+
+#### Calculating the number of peaks
+
+```{r}
+length(FOXA1)
+```
+
+#### Mean,median and max size of the peaks
+```{r}
+FOXA1.size<-width(FOXA1)
+summary(FOXA1.size)
+```
+
+#### Remove all peaks that are larger than 2kb
+
+```{r}
+FOXA1 <- FOXA1[width(FOXA1) <= 2000]
+FOXA1
+```
+
+#### Distribution of peak sizes
+```{r}
+hist(width(FOXA1), xlab="FOXA1 peak size", col="gray")
+```
+
+#### Distribution of FOXA1 ChIP-seq p-values
+
+```{r}
+mlPvals<-score(FOXA1) # earlier, we added p-values to the data under score
+
+hist(mlPvals, xlab="-log10(p-value)", col="blue")
+```
+
+## Compare the peaks of ER and FOXA1
+
+#### Load the ER peaks from the BED files
+
+```{r}
+library(rtracklayer)
+ER <- import.bed("http://www.carroll-lab.org.uk/FreshFiles/Data/Data_Sheet_3/MCF7_ER_binding.bed")
+
+ER
+```
+
+#### Format the 'name' column and add a new score column
+
+```{r}
+# assign scores by converting the 'name' field to type numeric
+# move the values under 'name' to 'score' 
+score(ER) <- as.numeric(ER$name)
+
+# Overwrite the name column
+ER$name<-paste("ER_peaks", 1:length(ER), sep="_")
+
+#use the names() function
+names(ER) <- ER$name
+
+ER
+
+```
+
+#### Make a barplot of the number of peaks in ER and FOXA1
+
+```{r}
+bp <- barplot(c(length(ER), length(FOXA1)), names=c("ER", "FOXA1"))
+
+# add values to the plot
+text(bp, c(length(ER), length(FOXA1)), labels=c(length(ER), length(FOXA1)), pos=1)
+```
+
+#### Number of ER peaks that overlap with FOXA1
+
+```{r}
+ovlHits<- findOverlaps(ER,FOXA1)
+ovlHits
+```
+
+
+#### Get subsets of binding sites
+
+```{r}
+ovl <- subsetByOverlaps(ER, FOXA1)
+length(ovl)
+
+# as percent
+length(ovl)/length(ER)*100
+```
+
+#### Make a Venn-diagram showing peak overlap between ER and FOXA1
+
+```{r}
+# take the subsets that are unique to ER and FOXA1
+
+ER.uniq <- setdiff(ER, FOXA1)
+FOXA1.uniq <- setdiff(FOXA1, ER)
+```
+
+```{r}
+#install.packages("Vennerable", repos="http://R-Forge.R-project.org")
+library(Vennerable)
+venn <- Venn(SetNames=c("ER", "FOXA1"), 
+    Weight=c(
+        '10'=length(ER.uniq), 
+        '11'=length(ovl), 
+        '01'=length(FOXA1.uniq)
+    )
+)
+
+plot(venn)
+```
+
+#### Functional Annotation of the peaks: to understand the function of the TF
+
+```{r}
+# download the TxDb package from bioconductor
+#source("https://bioconductor.org/biocLite.R")
+#biocLite("TxDb.Hsapiens.UCSC.hg18.knownGene")
+
+# load gene annotation from UCSC for human genome build hg18
+library(TxDb.Hsapiens.UCSC.hg18.knownGene)
+txdb <- TxDb.Hsapiens.UCSC.hg18.knownGene # just a shortcut
+```
+
+#### Assign each peak to a chromosomal region
+
+```{r}
+# download the ChIPpeakAnno package from bioconductor
+
+#source("https://bioconductor.org/biocLite.R")
+#biocLite("ChIPpeakAnno")
+```
+
+```{r}
+library(ChIPpeakAnno)
+ER.features <- assignChromosomeRegion(ER, TxDb=txdb, nucleotideLevel=FALSE)
+
+ER.features
+```
+
+#### Plot the percentage of peaks overlapping each feature/region
+
+```{r}
+# make a pie chart
+pie(ER.features$percentage)
+```
+
+```{r}
+# make a bar plot
+bp<-barplot(ER.features$percentage, ylab = "%")
+text(bp, ER.features$percentage, signif(ER.features$percentage,4), pos=1)
+```
+
+#### Get the subset of ER peaks that overlap a promoter region
+
+```{r}
+# We can get all genes as GRanges object form the annotation database with the function genes(). The function promoters() returns ranges around the transcription start site, defined as start(x)
+
+# Get all genes from the database as GRanges object
+genes<-genes(txdb)
+
+#take the region around the gene start as promoter
+prom<- promoters(genes,upstream=2000,downstream=200)
+prom
+```
+
+```{r}
+# calculate the subset of ER peaks that overlap with these promoter regions
+
+ERatProm<- subsetByOverlaps(ER,prom)
+
+#subset size
+length(ERatProm)
+```
+```{r}
+# percent of all ER peaks
+
+length(ERatProm)/length(ER)*100
+```
+
+#### Get the subset of genes that have a peak in their promoter regions 
+
+```{r}
+# can use again the function findOverlaps() to associate each peak to a promoter
+
+# look for overlap between ER peaks and promoters
+ERatProm.Hits<-findOverlaps(ER,prom)
+
+ERprom<-genes[subjectHits(ERatProm.Hits)]
+
+#take only unique ids
+gene.ids<-unique(names(ERprom))
+
+#write names to an output file
+write.table(gene.ids, file="ER_regulated_genes.txt",quote=FALSE, row.names=FALSE, col.names=FALSE)
+
+```
+
+#### Average distance between the peaks to the nearest TSS
+
+```{r}
+# get TSS as the only  start coordinate of genes
+tss<-resize(genes, width=1, fix="start")
+
+#calculate the distance of peaks from TSS
+d <- distanceToNearest(ER, tss)
+d
+```
+
+> The result is a Hits object associating each peak (query) to a gene (subject) with a metadata column distance
+
+```{r}
+# show the metacolumn as DataFrame object
+mcols(d)
+```
+
+```{r}
+# extract the distance column as vector
+dist<-mcols(d)[,1]
+
+# get the average distance in kb
+mean(dist)* 10^-3
+```
+
+#### Associate each peak to the nearest gene within the range of 10kb
+
+```{r}
+# subset hits object by distance
+
+close.Hits<-d[dist<=10000,]
+close.Hits
+```
+```{r}
+# get the indeces of genes
+ER.genes<- genes[subjectHits(close.Hits)]
+ER.genes
+```
+
+#### Write the gene IDs to an output file
+
+```{r}
+# extract the vector of names from the GRanges object
+gene.ids <- names(ER.genes)
+
+# take only unique ids
+gene.ids <- unique(gene.ids)
+
+# write names to an output file
+write.table(gene.ids, file="ER_regulated_genes.txt", quote=FALSE, row.names=FALSE, col.names=FALSE)
+```
+
+#### Write the ER and FOXA1 peak coordinates as BED file
+
+```{r}
+export.bed(ER, "ER_peaks.bed")
+export.bed(FOXA1, "FOXA1_peaks.bed")
+```
+
